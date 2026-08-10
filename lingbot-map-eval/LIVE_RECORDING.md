@@ -34,6 +34,30 @@ python live_map.py --model_path /path/to/lingbot-map.pt \
 Ctrl-C stops capture and writes the trajectory. Add `--save_cloud` to
 accumulate a PLY as you go.
 
+### The map it produces
+
+With `--save_cloud`, each frame's depth is unprojected to world coordinates
+using its predicted pose and fused into one growing colored point cloud, written
+on exit alongside `trajectory.npy`.
+
+Verified on 12 replayed frames of `example/loop` (indoor corridor):
+
+```
+Captured 12 frames in 135.3s
+Trajectory: 12 poses, path length 0.470, step mean 0.0427 max 0.0675
+Point cloud: 23,944 points -> live_map_out/live_cloud.ply
+```
+
+The cloud is geometrically coherent, not just non-empty — all coordinates
+finite, bounding box extent `1.08 × 1.05 × 2.39` (2.2× longer along the view
+axis than laterally, i.e. corridor-shaped), radial spread from the centroid
+tight at median 0.413 / p95 0.850 / max 1.852, so no scattered outliers.
+
+**What it is:** a colored 3D point cloud plus a camera trajectory, openable in
+MeshLab or CloudCompare. **What it is not:** a mesh, an occupancy grid, or a
+SLAM map with loop closure — and there is no live view while recording (see
+below).
+
 Pose and depth are emitted per frame as you record:
 
 ```
