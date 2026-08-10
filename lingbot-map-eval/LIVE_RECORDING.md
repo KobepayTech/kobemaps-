@@ -69,9 +69,21 @@ python compare_live_vs_batch.py --model_path /path/to/lingbot-map.pt \
     --image_folder example/loop --n 11
 ```
 
-Agreement to numerical noise means the incremental driver is a faithful use of
-the causal API rather than an approximation of it. Run it after any change to
-the preprocessing or the push loop.
+Measured on 11 frames of `example/loop` (8 scale + 3 streaming), CPU fp32:
+
+```
+extrinsics : max abs diff = 0.000e+00  mean = 0.000e+00
+depth      : max abs diff = 0.000e+00  mean = 0.000e+00
+depth      : max rel diff = 0.000e+00
+MATCH — incremental path is equivalent to batch
+```
+
+Bitwise identical, not merely close — the same deterministic ops run in the same
+order against the same KV cache state, so pushing frames one at a time is the
+same computation `inference_streaming` performs internally. The incremental
+driver is a faithful use of the causal API, not an approximation of it.
+
+Run it after any change to the preprocessing or the push loop.
 
 ## Practical notes for live use
 
