@@ -76,20 +76,32 @@ class CaptureSource:
     stream, which is how phone camera apps and IP cameras expose their feed.
     """
 
-    def __init__(self, target, width=None, height=None, drop_stale=True):
+    def __init__(self, target, width=None, height=None, drop_stale=True,
+                 reconnect_attempts=5, reconnect_delay=2.0):
         import cv2
         self.cv2 = cv2
+        self.target = target
+        self.width, self.height = width, height
         self.drop_stale = drop_stale
-        self.cap = cv2.VideoCapture(target)
+        self.reconnect_attempts = reconnect_attempts
+        self.reconnect_delay = reconnect_delay
+        self.cap = None
+        self._open()
+
+    def _open(self):
+        cv2 = self.cv2
+        if self.cap is not None:
+            self.cap.release()
+        self.cap = cv2.VideoCapture(self.target)
         if not self.cap.isOpened():
-            raise RuntimeError(f"Could not open capture source: {target!r}")
-        if width:
-            self.cap.set(cv2.CAP_PROP_FRAME_WIDTH, width)
-        if height:
-            self.cap.set(cv2.CAP_PROP_FRAME_HEIGHT, height)
+            raise RuntimeError(f"Could not open capture source: {self.target!r}")
+        if self.width:
+            self.cap.set(cv2.CAP_PROP_FRAME_WIDTH, self.width)
+        if self.height:
+            self.cap.set(cv2.CAP_PROP_FRAME_HEIGHT, self.height)
         # Inference is far slower than the camera, so the driver buffer fills with
         # stale frames. A small buffer keeps us near the live edge of the stream.
-        if drop_stale:
+        if self.drop_stale:
             try:
                 self.cap.set(cv2.CAP_PROP_BUFFERSIZE, 1)
             except Exception:
@@ -98,12 +110,28 @@ class CaptureSource:
     def read(self):
         ok, frame_bgr = self.cap.read()
         if not ok:
-            return None
+            # Network streams drop out; a transient failure should not end a
+            # capture session that may have been running for a long time.
+            for attempt in range(1, self.reconnect_attempts + 1):
+                print(f"  stream read failed, reconnecting "
+                      f"({attempt}/{self.reconnect_attempts})...", flush=True)
+                time.sleep(self.reconnect_delay)
+                try:
+                    self._open()
+                except RuntimeError:
+                    continue
+                ok, frame_bgr = self.cap.read()
+                if ok:
+                    print("  stream recovered.", flush=True)
+                    break
+            if not ok:
+                return None
         rgb = self.cv2.cvtColor(frame_bgr, self.cv2.COLOR_BGR2RGB)
         return Image.fromarray(rgb)
 
     def close(self):
-        self.cap.release()
+        if self.cap is not None:
+            self.cap.release()
 
 
 class ReplaySource:
@@ -293,6 +321,20 @@ def write_ply(path, xyz, rgb):
             f.write(f"{x:.5f} {y:.5f} {z:.5f} {int(r)} {int(g)} {int(b)}\n")
 
 
+def _flush_map(out_dir, cloud_xyz, cloud_rgb, centers):
+    """Write the map so far. Written to a temp file and renamed, so an
+    interrupted write cannot leave a truncated PLY behind."""
+    xyz = np.concatenate(cloud_xyz)
+    rgb = np.concatenate(cloud_rgb)
+    final = os.path.join(out_dir, "live_cloud.ply")
+    tmp = final + ".tmp"
+    write_ply(tmp, xyz, rgb)
+    os.replace(tmp, final)
+    if centers:
+        np.save(os.path.join(out_dir, "trajectory.npy"), np.array(centers))
+    return len(xyz)
+
+
 def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--model_path", required=True)
@@ -320,11 +362,38 @@ def main():
     ap.add_argument("--save_cloud", action="store_true",
                     help="Accumulate points for a PLY on exit (memory-hungry).")
     ap.add_argument("--cloud_stride", type=int, default=60)
+    ap.add_argument("--save_every", type=int, default=0,
+                    help="Write the map every N frames so a long capture "
+                         "survives a crash (0 = only on exit)")
     args = ap.parse_args()
 
     os.makedirs(args.out_dir, exist_ok=True)
+    if not os.path.isfile(args.model_path):
+        sys.exit(f"Checkpoint not found: {args.model_path}")
+
+    # Open the frame source *before* loading the model. The checkpoint takes
+    # ~60s to load, and a wrong camera index or stream URL should fail in a
+    # second rather than after a minute of waiting.
+    if args.source == "webcam":
+        src = CaptureSource(args.camera)
+    elif args.source == "stream":
+        if not args.stream_url:
+            sys.exit("--stream_url is required with --source stream")
+        print(f"Opening stream {args.stream_url} ...")
+        src = CaptureSource(args.stream_url)
+    else:
+        if not args.replay_dir:
+            sys.exit("--replay_dir is required with --source replay")
+        if not os.path.isdir(args.replay_dir):
+            sys.exit(f"Replay directory not found: {args.replay_dir}")
+        src = ReplaySource(args.replay_dir, limit=args.max_frames,
+                           delay=args.replay_delay)
+    print(f"Source ready: {args.source}")
+
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
     print(f"Device: {device}")
+    if device.type == "cpu":
+        print("  WARNING: no GPU detected — expect ~10 s/frame, not live capture speed.")
 
     print("Building model...")
     model = GCTStream(
@@ -346,19 +415,6 @@ def main():
     model = model.to(device).eval()
     if device.type == "cuda":
         model.aggregator = model.aggregator.to(dtype=torch.bfloat16)
-
-    if args.source == "webcam":
-        src = CaptureSource(args.camera)
-    elif args.source == "stream":
-        if not args.stream_url:
-            sys.exit("--stream_url is required with --source stream")
-        print(f"Opening stream {args.stream_url} ...")
-        src = CaptureSource(args.stream_url)
-    else:
-        if not args.replay_dir:
-            sys.exit("--replay_dir is required with --source replay")
-        src = ReplaySource(args.replay_dir, limit=args.max_frames,
-                           delay=args.replay_delay)
 
     viewer = None
     if args.view:
@@ -402,6 +458,10 @@ def main():
         for j in range(res["extrinsic"].shape[0]):
             c = camera_center(res["extrinsic"][j])
             centers.append(c)
+
+        if (args.save_every and args.save_cloud and cloud_xyz
+                and n % args.save_every == 0):
+            _flush_map(args.out_dir, cloud_xyz, cloud_rgb, centers)
 
         d = res["depth"][-1, ..., 0]
         cf = res["depth_conf"][-1]

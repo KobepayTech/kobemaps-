@@ -167,6 +167,24 @@ driver is a faithful use of the causal API, not an approximation of it.
 
 Run it after any change to the preprocessing or the push loop.
 
+## Operational flags
+
+| Flag | Why you want it |
+| :--- | :--- |
+| `--save_every N` | Writes the map every N frames. A long capture that crashes at minute 40 otherwise loses everything. Written to a temp file and renamed, so an interrupted write cannot leave a truncated PLY. |
+| `--keyframe_interval N` | Caches every Nth frame. Required for long sessions — the KV cache grows per frame and quality degrades past ~320 cached views. |
+| `--max_frames_shown N` | Retires the oldest point chunks from the viewer. Bounds browser memory; does not affect the saved PLY. |
+| `--cloud_stride N` | Keeps every Nth point. Lower = denser map, more memory. |
+| `--num_scale_frames 2` | Shrinks the scale-phase activation peak if you hit GPU OOM. |
+| `--camera_num_iterations 1` | Skips 3 camera-head refinement passes; faster, slightly less accurate poses. |
+
+Arguments are validated and the camera or stream is opened **before** the
+checkpoint loads, so a wrong URL or device index fails in about a second rather
+than after a minute of waiting.
+
+Network streams reconnect automatically on a dropped read (5 attempts, 2 s
+apart) rather than ending the session.
+
 ## Practical notes for live use
 
 - **You need a GPU.** Measured 10–16 s/frame on 4 CPU cores; the paper's ~20 FPS
