@@ -61,6 +61,34 @@ points in as they are produced, one scene node per frame, so an update costs
 O(new points) rather than re-uploading the whole cloud. `--max_frames_shown`
 retires the oldest chunks to bound browser memory on long sessions.
 
+Verified two ways:
+
+- **In isolation** — 6 synthetic frames pushed with `--max_frames_shown 3`;
+  server returned HTTP 200, oldest chunks correctly retired (3 retained), and
+  the frustum and trajectory spline updated without error.
+- **During real capture** — 11 replayed frames of `example/loop`. The viewer
+  answered HTTP 200 *while capture was still running*, which is the point: the
+  map is served as it builds, not after.
+
+### Scale-phase geometry fix
+
+The scale phase returns all N warmup frames in one result, but only the newest
+was being unprojected — so 7 of the first 8 frames never reached the map. Input
+frames are now carried through the result and every frame contributes.
+
+The point counts confirm it. Despite **fewer frames and a coarser stride**, the
+fixed version produces 64% more points:
+
+| | Frames | Stride | Points | Contributing frames | Points/frame (stride-normalised) |
+| :--- | ---: | ---: | ---: | ---: | ---: |
+| Before | 12 | 30 | 23,944 | 5 | 4,789 |
+| After | 11 | 40 | 39,387 | 11 | 4,774 |
+
+Per-frame density is unchanged (4,789 vs 4,774, 0.3% apart) — exactly what you
+expect if the fix changed *how many frames contribute* rather than the geometry
+itself. The resulting cloud stays coherent: all finite, extent
+`1.37 × 1.03 × 2.86` (corridor-shaped), radial spread median 0.420 / p95 0.921.
+
 Ctrl-C stops capture and writes the trajectory. Add `--save_cloud` to
 accumulate a PLY as you go.
 
