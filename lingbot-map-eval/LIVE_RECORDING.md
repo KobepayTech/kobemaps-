@@ -23,13 +23,43 @@ live loop needs — only the demo harness is offline, not the architecture.
 ## Usage
 
 ```bash
-# From an attached camera
-python live_map.py --model_path /path/to/lingbot-map.pt --source webcam --camera 0
+# From an attached camera, with the map building live in the browser
+python live_map.py --model_path /path/to/lingbot-map.pt \
+    --source webcam --camera 0 --view
+
+# From a phone or IP camera over the network
+python live_map.py --model_path /path/to/lingbot-map.pt \
+    --source stream --stream_url rtsp://192.168.1.42:8554/live --view
 
 # Replay frames off disk one at a time (same code path, no camera needed)
 python live_map.py --model_path /path/to/lingbot-map.pt \
-    --source replay --replay_dir example/loop --max_frames 100
+    --source replay --replay_dir example/loop --max_frames 100 --view
 ```
+
+### Sources
+
+| Flag | Use |
+| :--- | :--- |
+| `--source webcam --camera 0` | Attached USB / built-in camera |
+| `--source stream --stream_url URL` | RTSP / HTTP / MJPEG — phone camera apps, IP cameras |
+| `--source replay --replay_dir DIR` | Frames off disk, one at a time — identical code path, for testing without a camera |
+
+Network streams set `CAP_PROP_BUFFERSIZE=1`. Inference is much slower than the
+camera, so without this the driver buffer fills with stale frames and the map
+lags further behind reality the longer you record.
+
+### Live view (`--view`)
+
+Serves a viser scene at `http://localhost:8080` that grows as you record:
+accumulated points, a camera frustum at the current pose, and the trajectory
+so far. The viewer stays up after capture stops so you can inspect the result.
+
+This is the piece upstream does not have. `demo.py` only opens its viewer
+*after* processing a complete recording — `PointCloudViewer` takes a finished
+prediction dict and renders it once. `LiveViewer` instead pushes each frame's
+points in as they are produced, one scene node per frame, so an update costs
+O(new points) rather than re-uploading the whole cloud. `--max_frames_shown`
+retires the oldest chunks to bound browser memory on long sessions.
 
 Ctrl-C stops capture and writes the trajectory. Add `--save_cloud` to
 accumulate a PLY as you go.
