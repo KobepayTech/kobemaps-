@@ -1,0 +1,23 @@
+# CPU setup for LingBot-Map live capture.
+#
+#   pip install -r requirements-cpu.txt --extra-index-url https://download.pytorch.org/whl/cpu
+#   pip install -e /path/to/lingbot-map
+#
+# For GPU, install the CUDA build of torch instead (see LIVE_RECORDING.md):
+#   pip install torch==2.8.0 torchvision==0.23.0 --index-url https://download.pytorch.org/whl/cu128
+#   pip install flashinfer-python
+
+torch==2.8.0
+torchvision==0.23.0
+
+# lingbot-map's own runtime deps
+Pillow
+huggingface_hub
+einops
+safetensors
+opencv-python
+tqdm
+scipy
+
+# live viewer
+viser>=0.2.23
